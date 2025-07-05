@@ -1141,9 +1141,24 @@ class RayPPOTrainer:
                                     continue
                                 idx = sample_index[i].item()
                                 gt = original_batch.non_tensor_batch["reward_model"]["ground_truth"][idx]
+                                question = original_batch.non_tensor_batch.get("prompt", None)
+                                if question is not None:
+                                    question = question[idx]
+                                elif "prompt_ids" in original_batch.non_tensor_batch:
+                                    q_ids = original_batch.non_tensor_batch["prompt_ids"][idx]
+                                    question = self.tokenizer.decode(q_ids[q_ids != self.tokenizer.pad_token_id], skip_special_tokens=True)
                                 resp_ids = batch.batch["responses"][i]
-                                resp_txt = self.tokenizer.decode(resp_ids[resp_ids != self.tokenizer.pad_token_id], skip_special_tokens=True)
-                                process_rewards.append(_default_compute_score("process", resp_txt, gt))
+                                resp_txt = self.tokenizer.decode(
+                                    resp_ids[resp_ids != self.tokenizer.pad_token_id], skip_special_tokens=True
+                                )
+                                process_rewards.append(
+                                    _default_compute_score(
+                                        "process",
+                                        resp_txt,
+                                        gt,
+                                        extra_info={"question": question},
+                                    )
+                                )
                             process_rewards = torch.tensor(process_rewards, dtype=torch.float32, device=reward_tensor.device)
                             batch.batch["process_rewards"] = process_rewards
                             
