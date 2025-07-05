@@ -1140,7 +1140,7 @@ class RayPPOTrainer:
                                     process_rewards.append(0.0)
                                     continue
                                 idx = sample_index[i].item()
-                                gt = original_batch.non_tensor_batch["reward_model"]["ground_truth"][idx]
+                                gt = original_batch.non_tensor_batch["reward_model"][idx]["ground_truth"]
                                 question = original_batch.non_tensor_batch.get("prompt", None)
                                 if question is not None:
                                     question = question[idx]
