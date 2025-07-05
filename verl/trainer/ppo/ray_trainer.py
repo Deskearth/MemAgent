@@ -1129,10 +1129,8 @@ class RayPPOTrainer:
                             ##### make sure that samples in indexed proto are in same order as original_batch
                             reward_batch = final_batch(batch, final_mask, sample_index).union(original_batch)
                             reward_tensor, reward_extra_infos_dict = compute_reward(reward_batch, self.reward_fn)
-                            # pad for log_prob
-                            batch, pad_size = pad_dataproto_to_divisor(batch, self.actor_rollout_wg.world_size)
 
-                            # compute process reward for each memory update
+                            # compute process reward for each memory update before padding
                             from verl.utils.reward_score import _default_compute_score
                             process_rewards = []
                             for i in range(len(batch)):
@@ -1161,6 +1159,9 @@ class RayPPOTrainer:
                                 )
                             process_rewards = torch.tensor(process_rewards, dtype=torch.float32, device=reward_tensor.device)
                             batch.batch["process_rewards"] = process_rewards
+
+                            # pad for log_prob
+                            batch, pad_size = pad_dataproto_to_divisor(batch, self.actor_rollout_wg.world_size)
                             
                     if self.config.recurrent.enable and self.config.algorithm.get("filter_groups", None):  
                         # NOTE: When prompts after filtering is less than train batch size,
