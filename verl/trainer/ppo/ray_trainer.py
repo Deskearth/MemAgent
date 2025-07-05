@@ -1131,6 +1131,36 @@ class RayPPOTrainer:
                             reward_tensor, reward_extra_infos_dict = compute_reward(reward_batch, self.reward_fn)
                             # pad for log_prob
                             batch, pad_size = pad_dataproto_to_divisor(batch, self.actor_rollout_wg.world_size)
+
+                            # compute process reward for each memory update
+                            from verl.utils.reward_score import _default_compute_score
+                            process_rewards = []
+                            for i in range(len(batch)):
+                                if batch.batch["final_mask"][i]:
+                                    process_rewards.append(0.0)
+                                    continue
+                                idx = sample_index[i].item()
+                                gt = original_batch.non_tensor_batch["reward_model"][idx]["ground_truth"]
+                                question = original_batch.non_tensor_batch.get("prompt", None)
+                                if question is not None:
+                                    question = question[idx]
+                                elif "prompt_ids" in original_batch.non_tensor_batch:
+                                    q_ids = original_batch.non_tensor_batch["prompt_ids"][idx]
+                                    question = self.tokenizer.decode(q_ids[q_ids != self.tokenizer.pad_token_id], skip_special_tokens=True)
+                                resp_ids = batch.batch["responses"][i]
+                                resp_txt = self.tokenizer.decode(
+                                    resp_ids[resp_ids != self.tokenizer.pad_token_id], skip_special_tokens=True
+                                )
+                                process_rewards.append(
+                                    _default_compute_score(
+                                        "process",
+                                        resp_txt,
+                                        gt,
+                                        extra_info={"question": question},
+                                    )
+                                )
+                            process_rewards = torch.tensor(process_rewards, dtype=torch.float32, device=reward_tensor.device)
+                            batch.batch["process_rewards"] = process_rewards
                             
                     if self.config.recurrent.enable and self.config.algorithm.get("filter_groups", None):  
                         # NOTE: When prompts after filtering is less than train batch size,
@@ -1229,10 +1259,19 @@ class RayPPOTrainer:
                             # use batch: incorrect adv
                             if not self.config.algorithm.adv_estimator == AdvantageEstimator.GRPO:
                                 raise NotImplementedError("Only GRPO is implemented for recurrent.")
-                            advantage_scalar = compute_1D_grpo_advantage(token_level_rewards=reward_tensor, 
-                                                                         index=reward_batch.non_tensor_batch['uid'],
-                                                                         use_adv=self.config.algorithm.grpo_use_adv)
+                            advantage_scalar = compute_1D_grpo_advantage(
+                                token_level_rewards=reward_tensor,
+                                index=reward_batch.non_tensor_batch['uid'],
+                                use_adv=self.config.algorithm.grpo_use_adv,
+                            )
                             advantage_scalar = advantage_scalar[sample_index]
+
+                            # add process reward to advantage computation
+                            process_reward_sum = torch.zeros_like(reward_tensor[:, 0])
+                            for i, r in enumerate(process_rewards):
+                                if not batch.batch["final_mask"][i]:
+                                    process_reward_sum[sample_index[i]] += r
+                            advantage_scalar += process_reward_sum[sample_index]
 
                             # apply adv to non-mask tokens
                             response_length = batch.batch['responses'].size(-1)
@@ -1241,7 +1280,7 @@ class RayPPOTrainer:
                             batch.batch['advantages'] = advantages
                             batch.batch['returns'] = advantages                             
                             # turns of a sample will have the same final reward, now we mapping turns to samples
-                            batch.batch['token_level_scores'] = reward_tensor[sample_index]
+                            batch.batch['token_level_scores'] = reward_tensor[sample_index] + process_rewards.unsqueeze(1)
 
                             if not self.config.actor_rollout_ref.actor.get('use_kl_loss', False):
                                 raise NotImplementedError("KL penalty is not implemented for recurrent.")
