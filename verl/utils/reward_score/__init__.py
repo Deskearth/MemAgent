@@ -55,6 +55,10 @@ def _default_compute_score(data_source, solution_str, ground_truth, extra_info=N
     elif data_source in ['hotpotqa']:
         from . import hotpotqa
         res = hotpotqa.compute_score(solution_str, ground_truth)
+    elif data_source in ['process']:
+        from . import process_reward
+
+        res = process_reward.compute_score(solution_str, ground_truth)
     else:
         raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
 
