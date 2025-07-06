@@ -26,25 +26,34 @@ MAX_RETRY = int(os.environ.get("PRM_RETRY", "3"))
 RETRY_INTERVAL = float(os.environ.get("PRM_RETRY_INTERVAL", "1"))
 
 
+_TRACKER = None
+
+
+def _get_tracker():
+    """Return a Tracking instance for unified logging."""
+    global _TRACKER
+    if _TRACKER is None:
+        try:
+            from verl.utils.tracking import Tracking
+
+            project = os.environ.get("PRM_PROJECT", "process_reward")
+            experiment = os.environ.get("PRM_EXPERIMENT", "default")
+            backend_str = os.environ.get("PRM_LOGGER", "tensorboard")
+            backends = [b.strip() for b in backend_str.split(",")]
+            _TRACKER = Tracking(project_name=project, experiment_name=experiment, default_backend=backends)
+        except Exception:
+            _TRACKER = False  # type: ignore
+    return _TRACKER
+
+
 def _log_failure_to_dashboard(message: str) -> None:
-    """Log failure message to tensorboard or swanlab if available."""
-    # Tensorboard logging
+    """Log failure to dashboards via the unified tracking interface."""
+    tracker = _get_tracker()
+    if not tracker:
+        return
     try:
-        from torch.utils.tensorboard import SummaryWriter
+        tracker.log({"prm/failure": 1}, step=0)
 
-        tensorboard_dir = os.environ.get("TENSORBOARD_DIR", "tensorboard_log")
-        os.makedirs(tensorboard_dir, exist_ok=True)
-        writer = SummaryWriter(tensorboard_dir)
-        writer.add_text("prm/failure", message)
-        writer.close()
-    except Exception:
-        pass
-
-    # Swanlab logging
-    try:
-        import swanlab
-
-        swanlab.log({"prm/failure": swanlab.Text(message)}, step=0)
     except Exception:
         pass
 
