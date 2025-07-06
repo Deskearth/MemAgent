@@ -966,6 +966,7 @@ class RayPPOTrainer:
         from omegaconf import OmegaConf
 
         from verl.utils.tracking import Tracking
+        from verl.utils.reward_score import process_reward
 
         logger = Tracking(
             project_name=self.config.trainer.project_name,
@@ -973,6 +974,10 @@ class RayPPOTrainer:
             default_backend=self.config.trainer.logger,
             config=OmegaConf.to_container(self.config, resolve=True),
         )
+
+        # Configure the process reward model with the same tracking settings
+        process_reward.set_config(self.config)
+        process_reward.set_logger(logger)
 
         self.global_steps = 0
 
