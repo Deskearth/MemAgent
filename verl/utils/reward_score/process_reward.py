@@ -84,6 +84,43 @@ def _log_failure_to_dashboard(message: str, prompt: str, attempt: int) -> None:
     except Exception:
         pass
 
+# Maximum retry attempts for API call. Can be overridden by environment variable
+MAX_RETRY = int(os.environ.get("PRM_RETRY", "3"))
+# Seconds to wait between retries
+RETRY_INTERVAL = float(os.environ.get("PRM_RETRY_INTERVAL", "1"))
+
+
+_TRACKER = None
+
+
+def _get_tracker():
+    """Return a Tracking instance for unified logging."""
+    global _TRACKER
+    if _TRACKER is None:
+        try:
+            from verl.utils.tracking import Tracking
+
+            project = os.environ.get("PRM_PROJECT", "process_reward")
+            experiment = os.environ.get("PRM_EXPERIMENT", "default")
+            backend_str = os.environ.get("PRM_LOGGER", "tensorboard")
+            backends = [b.strip() for b in backend_str.split(",")]
+            _TRACKER = Tracking(project_name=project, experiment_name=experiment, default_backend=backends)
+        except Exception:
+            _TRACKER = False  # type: ignore
+    return _TRACKER
+
+
+def _log_failure_to_dashboard(message: str) -> None:
+    """Log failure to dashboards via the unified tracking interface."""
+    tracker = _get_tracker()
+    if not tracker:
+        return
+    try:
+        tracker.log({"prm/failure": 1}, step=0)
+
+    except Exception:
+        pass
+
 
 def _get_client() -> Any:
     """Return a cached OpenAI client instance."""
@@ -152,6 +189,7 @@ def compute_score(solution_str: str, ground_truth, extra_info: Dict[str, Any] | 
             print(f"Process reward attempt {attempt} failed: {exc}")
             if attempt >= MAX_RETRY:
                 _log_failure_to_dashboard(str(exc), prompt, attempt)
+
                 return 0.0
             time.sleep(RETRY_INTERVAL)
 
