@@ -10,7 +10,8 @@ invoked with a short yes/no prompt and returns ``1.0`` if the answer begins with
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable
+import time
+from typing import Any, Dict, Iterable, Optional
 
 try:  # Optional dependency
     from openai import OpenAI
@@ -18,6 +19,70 @@ except Exception:  # pragma: no cover - optional dependency might be missing
     OpenAI = None  # type: ignore
 
 _CLIENT = None
+_CONFIG: Optional[Any] = None
+_LOGGER = None
+
+# Maximum retry attempts for API call. Can be overridden by environment variable
+MAX_RETRY = int(os.environ.get("VERL_PRM_RETRY", "3"))
+# Seconds to wait between retries
+RETRY_INTERVAL = float(os.environ.get("VERL_PRM_RETRY_INTERVAL", "1"))
+
+
+_TRACKER = None
+
+
+def set_config(config: Any) -> None:
+    """Configure the PRM module using a trainer config."""
+    global _CONFIG
+    _CONFIG = config
+
+
+def set_logger(logger: Any) -> None:
+    """Use an existing Tracking instance for logging."""
+    global _LOGGER, _TRACKER
+    _LOGGER = logger
+    _TRACKER = logger
+
+
+def _get_tracker():
+    """Return a Tracking instance for unified logging."""
+    global _TRACKER
+    if _TRACKER is None:
+        if _LOGGER is not None:
+            _TRACKER = _LOGGER
+            return _TRACKER
+        try:
+            from verl.utils.tracking import Tracking
+            if _CONFIG is not None:
+                from omegaconf import OmegaConf
+
+                _TRACKER = Tracking(
+                    project_name=_CONFIG.trainer.project_name,
+                    experiment_name=_CONFIG.trainer.experiment_name,
+                    default_backend=_CONFIG.trainer.logger,
+                    config=OmegaConf.to_container(_CONFIG, resolve=True),
+                )
+            else:
+                _TRACKER = False  # type: ignore
+        except Exception:
+            _TRACKER = False  # type: ignore
+    return _TRACKER
+
+
+def _log_failure_to_dashboard(message: str, prompt: str, attempt: int) -> None:
+    """Log detailed failure info to dashboards via the unified tracking interface."""
+    tracker = _get_tracker()
+    if not tracker:
+        return
+    try:
+        tracker.log({
+            "prm/failure": 1,
+            "prm/error": message,
+            "prm/failure_attempt": attempt,
+        }, step=0)
+        tracker.log({"prm/prompt": prompt[:200]}, step=0)
+    except Exception:
+        pass
 
 
 def _get_client() -> Any:
@@ -28,8 +93,8 @@ def _get_client() -> Any:
         if OpenAI is None:
             raise RuntimeError("openai package is required for process reward")
         _CLIENT = OpenAI(
-            api_key=os.environ.get("PRM_OPENAI_API_KEY", "NOT_A_REAL_KEY"),
-            base_url=os.environ.get("PRM_OPENAI_BASE_URL", "http://localhost:8000/v1"),
+            api_key=os.environ.get("VERL_PRM_OPENAI_API_KEY", "NOT_A_REAL_KEY"),
+            base_url=os.environ.get("VERL_PRM_OPENAI_BASE_URL", "http://localhost:8000/v1"),
         )
     return _CLIENT
 
@@ -72,17 +137,21 @@ def compute_score(solution_str: str, ground_truth, extra_info: Dict[str, Any] | 
         f"Memory: {solution_str}"
     )
 
-    try:
-        client = _get_client()
-        completion = client.chat.completions.create(
-            model=os.environ.get("PRM_OPENAI_MODEL", "gpt-3.5-turbo"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=1,
-        )
-        content = completion.choices[0].message.content.strip().lower()
-        return 1.0 if content.startswith("yes") else 0.0
-    except Exception as exc:  # pragma: no cover - network call
-        print(f"Process reward model failed: {exc}")
-        return 0.0
+    for attempt in range(1, MAX_RETRY + 1):
+        try:
+            client = _get_client()
+            completion = client.chat.completions.create(
+                model=os.environ.get("VERL_PRM_OPENAI_MODEL", "gpt-3.5-turbo"),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=1,
+            )
+            content = completion.choices[0].message.content.strip().lower()
+            return 1.0 if content.startswith("yes") else 0.0
+        except Exception as exc:  # pragma: no cover - network call
+            print(f"Process reward attempt {attempt} failed: {exc}")
+            if attempt >= MAX_RETRY:
+                _log_failure_to_dashboard(str(exc), prompt, attempt)
+                return 0.0
+            time.sleep(RETRY_INTERVAL)
 
