@@ -10,6 +10,7 @@ invoked with a short yes/no prompt and returns ``1.0`` if the answer begins with
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Dict, Iterable
 
 try:  # Optional dependency
@@ -18,6 +19,42 @@ except Exception:  # pragma: no cover - optional dependency might be missing
     OpenAI = None  # type: ignore
 
 _CLIENT = None
+
+# Maximum retry attempts for API call. Can be overridden by environment variable
+MAX_RETRY = int(os.environ.get("PRM_RETRY", "3"))
+# Seconds to wait between retries
+RETRY_INTERVAL = float(os.environ.get("PRM_RETRY_INTERVAL", "1"))
+
+
+_TRACKER = None
+
+
+def _get_tracker():
+    """Return a Tracking instance for unified logging."""
+    global _TRACKER
+    if _TRACKER is None:
+        try:
+            from verl.utils.tracking import Tracking
+
+            project = os.environ.get("PRM_PROJECT", "process_reward")
+            experiment = os.environ.get("PRM_EXPERIMENT", "default")
+            backend_str = os.environ.get("PRM_LOGGER", "tensorboard")
+            backends = [b.strip() for b in backend_str.split(",")]
+            _TRACKER = Tracking(project_name=project, experiment_name=experiment, default_backend=backends)
+        except Exception:
+            _TRACKER = False  # type: ignore
+    return _TRACKER
+
+
+def _log_failure_to_dashboard(message: str) -> None:
+    """Log failure to dashboards via the unified tracking interface."""
+    tracker = _get_tracker()
+    if not tracker:
+        return
+    try:
+        tracker.log({"prm/failure": 1}, step=0)
+    except Exception:
+        pass
 
 
 def _get_client() -> Any:
@@ -72,17 +109,21 @@ def compute_score(solution_str: str, ground_truth, extra_info: Dict[str, Any] | 
         f"Memory: {solution_str}"
     )
 
-    try:
-        client = _get_client()
-        completion = client.chat.completions.create(
-            model=os.environ.get("PRM_OPENAI_MODEL", "gpt-3.5-turbo"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=1,
-        )
-        content = completion.choices[0].message.content.strip().lower()
-        return 1.0 if content.startswith("yes") else 0.0
-    except Exception as exc:  # pragma: no cover - network call
-        print(f"Process reward model failed: {exc}")
-        return 0.0
+    for attempt in range(1, MAX_RETRY + 1):
+        try:
+            client = _get_client()
+            completion = client.chat.completions.create(
+                model=os.environ.get("PRM_OPENAI_MODEL", "gpt-3.5-turbo"),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=1,
+            )
+            content = completion.choices[0].message.content.strip().lower()
+            return 1.0 if content.startswith("yes") else 0.0
+        except Exception as exc:  # pragma: no cover - network call
+            print(f"Process reward attempt {attempt} failed: {exc}")
+            if attempt >= MAX_RETRY:
+                _log_failure_to_dashboard(str(exc))
+                return 0.0
+            time.sleep(RETRY_INTERVAL)
 
