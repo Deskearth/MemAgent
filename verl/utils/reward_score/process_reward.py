@@ -53,6 +53,7 @@ def _log_failure_to_dashboard(message: str) -> None:
         return
     try:
         tracker.log({"prm/failure": 1}, step=0)
+
     except Exception:
         pass
 
