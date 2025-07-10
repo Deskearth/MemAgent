@@ -18,6 +18,7 @@ class ENV:
     RECURRENT_MAX_CONTEXT_LEN: int = None
     RECURRENT_CHUNK_SIZE: int = None
     RECURRENT_MAX_NEW: int = None
+    MEMORY_LOG_FILE: str = None
 
     def setenv(self):
         if not hasattr(self, "_environ"):
@@ -338,5 +339,8 @@ def run_ood_tasks():
 
 if __name__ == "__main__":
     print(f"{SERVE_PORT=}, {DASH_PORT=}, {MODELROOT=}")
+    log_path = os.path.join(os.path.dirname(__file__), "memory_updates.jsonl")
+    open(log_path, "w").close()
+    os.environ["MEMORY_LOG_FILE"] = log_path
     run_ruler_hqa()
     run_ood_tasks()
