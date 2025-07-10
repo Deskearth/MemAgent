@@ -52,7 +52,6 @@ async def async_query_llm(item, model, tokenizer, temperature=0.7, top_p=0.95, s
     prompt = item['input'].strip()
     session = await get_async_client()
     log_file = os.getenv("MEMORY_LOG_FILE")
-    logs = []
     async with session:
         max_len = RECURRENT_MAX_CONTEXT_LEN
         input_ids = tokenizer.encode(context)
@@ -84,7 +83,13 @@ async def async_query_llm(item, model, tokenizer, temperature=0.7, top_p=0.95, s
                     data = await resp.json()
                     memory, _ = extract_solution(data['choices'][0]['message']['content'])
                     if log_file:
-                        logs.append({"_id": idx, "question": prompt, "chunk": chunk_text, "memory": memory})
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                "_id": idx,
+                                "question": prompt,
+                                "chunk": chunk_text,
+                                "memory": memory
+                            }, ensure_ascii=False) + "\n")
                     if idx == 0:
                         print("assistant:")
                         print(clip_long_string(memory))
@@ -115,11 +120,14 @@ async def async_query_llm(item, model, tokenizer, temperature=0.7, top_p=0.95, s
                     return ''
                 data = await resp.json()
                 if log_file:
-                    logs.append({"_id": idx, "question": prompt, "chunk": None, "memory": memory, "answer": data['choices'][0]['message']['content']})
                     with open(log_file, 'a', encoding='utf-8') as f:
-                        for item_log in logs:
-                            f.write(json.dumps(item_log, ensure_ascii=False) + "\n")
-                    logs.clear()
+                        f.write(json.dumps({
+                            "_id": idx,
+                            "question": prompt,
+                            "chunk": None,
+                            "memory": memory,
+                            "answer": data['choices'][0]['message']['content']
+                        }, ensure_ascii=False) + "\n")
                 if idx == 0:
                     print("assistant:")
                     print(data['choices'][0]['message']['content'])
